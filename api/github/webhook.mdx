@@ -1,0 +1,309 @@
+---
+title: 'GitHub Webhook Handler'
+api: 'POST /github/webhook'
+description: 'Receive and process GitHub webhook events'
+---
+
+## Overview
+
+The GitHub webhook endpoint receives events from GitHub when actions occur on your repositories or GitHub App installation. Diffy processes these events to track pull requests and installations.
+
+## Endpoint
+
+```
+POST /github/webhook
+```
+
+## Authentication
+
+<Warning>
+  This endpoint uses webhook signature verification for security. All requests must include a valid `x-hub-signature-256` header.
+</Warning>
+
+Webhook requests are authenticated using HMAC-SHA256 signatures. GitHub signs each webhook payload with your webhook secret, and Diffy verifies the signature before processing events.
+
+## Request
+
+### Headers
+
+<ParamField header="x-hub-signature-256" type="string" required>
+  HMAC-SHA256 signature of the request body, used to verify the webhook came from GitHub
+  
+  Format: `sha256=<signature>`
+</ParamField>
+
+<ParamField header="x-github-event" type="string" required>
+  The type of event being sent. Supported values:
+  - `installation` - GitHub App installation events
+  - `pull_request` - Pull request events
+</ParamField>
+
+<ParamField header="x-github-delivery" type="string" required>
+  Unique identifier for the webhook delivery. Used for idempotency and tracking.
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+### Request Body
+
+The request body structure varies depending on the event type. All webhook payloads include an `installation` object with an `id` field.
+
+## Security
+
+### Signature Verification
+
+Diffy verifies webhook signatures using the following process:
+
+1. Extracts the raw request body
+2. Compares the HMAC-SHA256 hash with the `x-hub-signature-256` header
+3. Rejects requests with invalid signatures
+
+Source: `/home/daytona/workspace/source/src/github/github.controller.ts:52`
+
+```typescript
+const isValid = await this.githubService.validateWebhook(
+  rawBody,
+  signature,
+);
+
+if (!isValid) {
+  console.log('Invalid webhook');
+  return { status: 'ERROR' };
+}
+```
+
+<Warning>
+  Never disable signature verification. Invalid signatures return `{"status": "ERROR"}` and are not processed.
+</Warning>
+
+## Supported Events
+
+### Installation Event
+
+Received when the GitHub App is installed, uninstalled, or modified.
+
+#### Event Payload Example
+
+```json
+{
+  "action": "created",
+  "installation": {
+    "id": 12345678
+  },
+  "sender": {
+    "id": 987654,
+    "login": "octocat"
+  },
+  "repositories": [
+    {
+      "id": 1234567,
+      "name": "my-repo",
+      "full_name": "octocat/my-repo"
+    }
+  ]
+}
+```
+
+#### Processing
+
+<ParamField body="action" type="string" required>
+  The action performed. Values:
+  - `created` - App was installed (processed)
+  - `deleted` - App was uninstalled (ignored)
+  - `suspend` - App access was suspended (ignored)
+  - `unsuspend` - App access was restored (ignored)
+</ParamField>
+
+<ParamField body="installation.id" type="number" required>
+  The installation ID, linked to the user's account
+</ParamField>
+
+<ParamField body="sender.id" type="number" required>
+  GitHub user ID of the person who performed the installation
+</ParamField>
+
+When `action` is `"created"`, Diffy:
+1. Looks up the user by their GitHub ID
+2. Updates the user record with the installation ID
+3. Enables webhook processing for that user's repositories
+
+Source: `/home/daytona/workspace/source/src/github/github.controller.ts:65`
+
+```typescript
+if (event === 'installation') {
+  const body = req.body as EmitterWebhookEvent<'installation'>['payload'];
+  await this.githubService.handleInstallation(
+    installationId,
+    body.sender.id,
+    body.action,
+  );
+}
+```
+
+### Pull Request Event
+
+Received when a pull request is opened, closed, edited, or synchronized.
+
+#### Event Payload Example
+
+```json
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "id": 1234567890,
+    "number": 42,
+    "title": "Add new feature",
+    "body": "This PR adds a new feature to improve performance",
+    "state": "open",
+    "html_url": "https://github.com/octocat/my-repo/pull/42",
+    "diff_url": "https://github.com/octocat/my-repo/pull/42.diff",
+    "user": {
+      "id": 987654,
+      "login": "octocat"
+    },
+    "created_at": "2026-03-03T10:00:00Z",
+    "updated_at": "2026-03-03T10:00:00Z",
+    "commits": 3,
+    "additions": 120,
+    "deletions": 45,
+    "changed_files": 8
+  },
+  "repository": {
+    "id": 1234567,
+    "name": "my-repo",
+    "full_name": "octocat/my-repo"
+  },
+  "installation": {
+    "id": 12345678
+  },
+  "sender": {
+    "id": 987654,
+    "login": "octocat"
+  }
+}
+```
+
+#### Processing
+
+<ParamField body="action" type="string" required>
+  The action performed on the pull request:
+  - `opened` - PR was created (processed)
+  - `closed` - PR was closed or merged (ignored)
+  - `synchronize` - New commits pushed (ignored)
+  - `edited` - PR title/body edited (ignored)
+  - `reopened` - PR reopened (ignored)
+</ParamField>
+
+<ParamField body="pull_request" type="object" required>
+  Complete pull request data including metadata, file changes, and author information
+</ParamField>
+
+<ParamField body="repository" type="object" required>
+  Repository where the pull request was created
+</ParamField>
+
+<ParamField body="installation.id" type="number" required>
+  Installation ID to authenticate API requests
+</ParamField>
+
+Pull request events are queued for asynchronous processing using BullMQ:
+
+Source: `/home/daytona/workspace/source/src/github/github.controller.ts:72`
+
+```typescript
+else if (event === 'pull_request') {
+  const body = req.body as EmitterWebhookEvent<'pull_request'>['payload'];
+  await this.webhookQueue.add('handle-pull-request', {
+    installationId,
+    payload: body,
+    deliveryId,
+  });
+}
+```
+
+The queue processor:
+1. Checks if the PR was already processed (using `deliveryId` for idempotency)
+2. Creates a database record with PR metadata
+3. Triggers analysis workflows
+
+## Response
+
+### Success Response
+
+```json
+{
+  "status": "OK"
+}
+```
+
+<ResponseField name="status" type="string">
+  `"OK"` when the webhook was processed successfully
+</ResponseField>
+
+### Error Response
+
+```json
+{
+  "status": "ERROR"
+}
+```
+
+<ResponseField name="status" type="string">
+  `"ERROR"` when signature verification fails
+</ResponseField>
+
+## Status Codes
+
+| Code | Description |
+|------|-------------|
+| 200 | Webhook received and processed successfully |
+| 400 | Missing raw body or invalid request format |
+
+## Testing Webhooks
+
+### Using GitHub's Webhook Delivery UI
+
+1. Go to your GitHub App settings
+2. Navigate to "Advanced" tab
+3. Find recent webhook deliveries
+4. Click "Redeliver" to resend an event
+
+### Local Development
+
+Use a tool like [ngrok](https://ngrok.com/) or [smee.io](https://smee.io/) to forward GitHub webhooks to your local development environment:
+
+```bash
+# Using ngrok
+ngrok http 3000
+
+# Update your GitHub App webhook URL to:
+# https://your-ngrok-url.ngrok.io/github/webhook
+```
+
+## Error Handling
+
+<Warning>
+  If webhook processing fails, check the GitHub webhook delivery logs for details. Failed webhooks are not automatically retried.
+</Warning>
+
+Common issues:
+
+- **Invalid signature**: Check that `GITHUB_APP_WEBHOOK_SECRET` matches your GitHub App configuration
+- **Missing raw body**: Ensure your server middleware preserves the raw request body for signature verification
+- **User not found**: The GitHub user must be registered in Diffy before installing the app
+
+## Implementation Reference
+
+Key files:
+- Controller: `/home/daytona/workspace/source/src/github/github.controller.ts:42`
+- Service: `/home/daytona/workspace/source/src/github/github.service.ts:115`
+- Queue processor: `/home/daytona/workspace/source/src/github/processors/pull-request.processor.ts`
+
+## See Also
+
+- [GitHub App Installation](/api/github/install)
+- [GitHub Webhooks Documentation](https://docs.github.com/en/developers/webhooks-and-events/webhooks/about-webhooks)
+- [Securing Webhooks](https://docs.github.com/en/developers/webhooks-and-events/webhooks/securing-your-webhooks)

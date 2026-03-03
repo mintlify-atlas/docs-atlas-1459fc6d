@@ -1,0 +1,86 @@
+---
+title: "Delete Comment"
+api: "DELETE /comments/:id"
+---
+
+Delete a comment from a pull request. Deleting a parent comment will also delete all its threaded replies.
+
+## Authentication
+
+This endpoint requires JWT authentication. Include the JWT token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="id" type="string" required>
+  The ID of the comment to delete
+</ParamField>
+
+## Response
+
+<ResponseField name="id" type="string">
+  The unique identifier of the deleted comment
+</ResponseField>
+
+<ResponseField name="body" type="string">
+  The content of the deleted comment
+</ResponseField>
+
+<ResponseField name="filePath" type="string">
+  The file path where the comment was made
+</ResponseField>
+
+<ResponseField name="lineNumber" type="number">
+  The line number in the file
+</ResponseField>
+
+<ResponseField name="pullRequestId" type="string">
+  The ID of the pull request
+</ResponseField>
+
+<ResponseField name="userId" type="number">
+  The ID of the user who created the comment
+</ResponseField>
+
+<ResponseField name="parentCommentId" type="string" optional>
+  The ID of the parent comment if this was a reply
+</ResponseField>
+
+<ResponseField name="resolved" type="boolean">
+  Whether this comment thread was resolved
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the comment was created
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of when the comment was last updated
+</ResponseField>
+
+## Example
+
+```bash
+curl -X DELETE https://api.diffy.com/comments/1 \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response
+
+```json
+{
+  "id": "1",
+  "body": "This function could be optimized by caching the result",
+  "filePath": "src/utils/processor.ts",
+  "lineNumber": 42,
+  "pullRequestId": "123456789",
+  "userId": 5,
+  "parentCommentId": null,
+  "resolved": false,
+  "createdAt": "2026-03-01T10:30:00Z",
+  "updatedAt": "2026-03-01T10:30:00Z"
+}
+```

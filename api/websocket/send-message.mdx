@@ -1,0 +1,203 @@
+---
+title: "Send Message"
+api: "WebSocket send-message-to-pr-room"
+description: "Send a message to all users in a pull request room"
+---
+
+## Event Name
+
+`send-message-to-pr-room`
+
+## Description
+
+Send a message to all users currently in a pull request room. This enables real-time chat functionality within a specific pull request context.
+
+## Connection Setup
+
+First, establish a WebSocket connection and join a room:
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+socket.on('connect', () => {
+  // Join the room first
+  socket.emit('join-pr-room', {
+    pullRequestId: 123,
+    username: 'johndoe'
+  });
+});
+```
+
+## Payload
+
+<ParamField body="pullRequestId" type="number" required>
+  The ID of the pull request room where the message should be sent
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The username of the user sending the message
+</ParamField>
+
+<ParamField body="message" type="string" required>
+  The message content to send to the room
+</ParamField>
+
+## Request Example
+
+```javascript
+socket.emit('send-message-to-pr-room', {
+  pullRequestId: 123,
+  username: 'johndoe',
+  message: 'This looks great! Approved.'
+});
+```
+
+## Server Responses
+
+When a message is sent, the server broadcasts it to all users in the room.
+
+### `pr-room-message` Event
+
+Broadcast to all users in the room (including the sender).
+
+<ResponseField name="username" type="string">
+  The username of the user who sent the message
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  The message content that was sent
+</ResponseField>
+
+## Listening for Messages
+
+```javascript
+socket.on('pr-room-message', (data) => {
+  console.log(`${data.username}: ${data.message}`);
+  // Example output: "johndoe: This looks great! Approved."
+});
+```
+
+## Complete Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+const pullRequestId = 123;
+const username = 'johndoe';
+
+socket.on('connect', () => {
+  console.log('Connected to WebSocket server');
+  
+  // Join the room first
+  socket.emit('join-pr-room', {
+    pullRequestId,
+    username
+  });
+});
+
+// Listen for incoming messages
+socket.on('pr-room-message', (data) => {
+  console.log(`${data.username}: ${data.message}`);
+  
+  // Update your UI with the new message
+  displayMessage(data.username, data.message);
+});
+
+// Send a message
+function sendMessage(text) {
+  socket.emit('send-message-to-pr-room', {
+    pullRequestId,
+    username,
+    message: text
+  });
+}
+
+// Example: Send a message when user submits form
+sendMessage('This looks great! Approved.');
+```
+
+## React Example
+
+```javascript
+import { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
+
+function PRChat({ pullRequestId, username }) {
+  const [socket, setSocket] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState('');
+
+  useEffect(() => {
+    const newSocket = io('https://api.diffy.com', {
+      transports: ['websocket']
+    });
+
+    newSocket.on('connect', () => {
+      newSocket.emit('join-pr-room', {
+        pullRequestId,
+        username
+      });
+    });
+
+    newSocket.on('pr-room-message', (data) => {
+      setMessages((prev) => [...prev, data]);
+    });
+
+    setSocket(newSocket);
+
+    return () => {
+      newSocket.emit('leave-pr-room', { pullRequestId, username });
+      newSocket.close();
+    };
+  }, [pullRequestId, username]);
+
+  const sendMessage = () => {
+    if (socket && inputMessage.trim()) {
+      socket.emit('send-message-to-pr-room', {
+        pullRequestId,
+        username,
+        message: inputMessage
+      });
+      setInputMessage('');
+    }
+  };
+
+  return (
+    <div>
+      <div className="messages">
+        {messages.map((msg, idx) => (
+          <div key={idx}>
+            <strong>{msg.username}:</strong> {msg.message}
+          </div>
+        ))}
+      </div>
+      <input
+        value={inputMessage}
+        onChange={(e) => setInputMessage(e.target.value)}
+        onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+      />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+}
+```
+
+## Room Architecture
+
+Messages are broadcast only to users who have joined the specific pull request room using the `join-pr-room` event. The room identifier follows the pattern `pr:{pullRequestId}`.
+
+## Notes
+
+- You must join a room using `join-pr-room` before sending messages
+- Messages are broadcast to all users in the room, including the sender
+- The server does not store message history; messages are only broadcast in real-time
+- Messages are only sent to currently connected users in the room
+- Consider implementing typing indicators using the `typing` and `stop-typing` events for better UX

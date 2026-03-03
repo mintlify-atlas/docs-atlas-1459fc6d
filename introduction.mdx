@@ -1,0 +1,114 @@
+---
+title: Introduction
+description: Welcome to Diffy API - A powerful backend for collaborative code review
+---
+
+<Note>
+  Diffy API powers real-time collaborative code review experiences with GitHub integration, WebSocket-based collaboration, and comprehensive pull request management.
+</Note>
+
+## What is Diffy API?
+
+Diffy API is a modern, scalable backend service built with NestJS that enables teams to collaborate on code reviews in real-time. It seamlessly integrates with GitHub to provide an enhanced code review experience with inline comments, threaded discussions, and live collaboration features.
+
+Built on top of a robust tech stack including NestJS, Prisma, PostgreSQL, Redis, and Socket.IO, Diffy API handles everything from GitHub webhook processing to real-time event distribution across connected clients.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card
+    title="GitHub Integration"
+    icon="github"
+    href="/api/github/install"
+  >
+    Seamless GitHub App installation, webhook processing, and pull request synchronization with automatic data persistence.
+  </Card>
+  
+  <Card
+    title="Real-Time Collaboration"
+    icon="comments"
+    href="/api/websocket/join-room"
+  >
+    WebSocket-powered live presence, typing indicators, and instant comment updates for teams reviewing code together.
+  </Card>
+  
+  <Card
+    title="Inline Code Comments"
+    icon="code"
+    href="/api/comments/create"
+  >
+    Line-level commenting with threaded discussions, resolution tracking, and automatic GitHub synchronization.
+  </Card>
+  
+  <Card
+    title="JWT Authentication"
+    icon="shield-halved"
+    href="/api/auth/github-login"
+  >
+    Secure OAuth 2.0 authentication via GitHub with JWT token management and protected API endpoints.
+  </Card>
+  
+  <Card
+    title="Pull Request Management"
+    icon="code-pull-request"
+    href="/api/pull-requests/get-pull-request"
+  >
+    Comprehensive PR metadata storage including commits, additions, deletions, and full diff access.
+  </Card>
+  
+  <Card
+    title="Background Job Processing"
+    icon="gears"
+    href="/guides/webhooks"
+  >
+    Redis-backed BullMQ queues for scalable webhook processing and asynchronous task execution.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Diffy API is structured around several core modules:
+
+- **Auth Module**: Handles GitHub OAuth authentication and JWT token generation
+- **GitHub Module**: Manages GitHub App installation, webhooks, and API interactions
+- **Comments Module**: Provides CRUD operations for inline code comments with threading support
+- **Events Module**: WebSocket gateway for real-time collaboration features
+- **Users Module**: User profile management and GitHub account linking
+
+## Technology Stack
+
+- **Framework**: NestJS with TypeScript
+- **Database**: PostgreSQL with Prisma ORM
+- **Cache/Queue**: Redis with BullMQ
+- **Real-time**: Socket.IO
+- **Authentication**: Passport.js with GitHub OAuth 2.0 and JWT
+- **API Client**: Octokit for GitHub API integration
+
+## Use Cases
+
+- **Team Code Reviews**: Enable multiple developers to review pull requests simultaneously with live presence
+- **Code Quality Gates**: Add inline comments and discussions before merging
+- **Asynchronous Collaboration**: Leave threaded comments that persist across sessions
+- **GitHub Workflow Enhancement**: Extend GitHub's native code review capabilities with custom features
+
+## Getting Started
+
+Ready to integrate Diffy API into your workflow? Check out our [Quickstart Guide](/quickstart) to get up and running in minutes.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart Guide"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get started with Diffy API in under 5 minutes
+  </Card>
+  
+  <Card
+    title="API Reference"
+    icon="book"
+    href="/api/auth/github-login"
+  >
+    Explore all available endpoints and WebSocket events
+  </Card>
+</CardGroup>

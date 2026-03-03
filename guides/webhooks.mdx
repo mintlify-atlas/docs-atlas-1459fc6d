@@ -1,0 +1,472 @@
+---
+title: GitHub Webhooks
+description: Handle GitHub webhook events to process pull requests in real-time
+---
+
+## Overview
+
+Diffy receives GitHub webhook events to automatically process pull requests when they're opened, updated, or closed. This guide covers webhook setup, validation, and event handling.
+
+## Webhook Events
+
+Diffy listens for these GitHub webhook events:
+
+| Event | Trigger | Purpose |
+|-------|---------|----------|
+| `installation` | App installed/uninstalled | Track app installations to user accounts |
+| `pull_request` | PR opened/updated/closed | Create and update pull request records |
+
+## Webhook Endpoint
+
+The webhook endpoint is exposed at `/github/webhook`:
+
+```typescript github.controller.ts
+@Controller('github')
+export class GithubController {
+  constructor(
+    private readonly githubService: GithubService,
+    @InjectQueue('webhook-queue') private webhookQueue: Queue,
+  ) {}
+
+  @Post('webhook')
+  async webhook(
+    @Req() req: WebhookRequest,
+    @Headers('x-hub-signature-256') signature: string,
+    @Headers('x-github-event') event: string,
+    @Headers('x-github-delivery') deliveryId: string,
+  ) {
+    if (!req.rawBody) throw new BadRequestException('Missing raw body');
+    const rawBody = req.rawBody.toString();
+
+    // Validate webhook signature
+    const isValid = await this.githubService.validateWebhook(
+      rawBody,
+      signature,
+    );
+
+    if (!isValid) {
+      console.log('Invalid webhook');
+      return { status: 'ERROR' };
+    }
+
+    const installationId = (req.body as { installation: { id: number } })
+      .installation.id;
+
+    // Handle different event types
+    if (event === 'installation') {
+      const body = req.body as EmitterWebhookEvent<'installation'>['payload'];
+      await this.githubService.handleInstallation(
+        installationId,
+        body.sender.id,
+        body.action,
+      );
+    } else if (event === 'pull_request') {
+      const body = req.body as EmitterWebhookEvent<'pull_request'>['payload'];
+      // Queue for async processing
+      await this.webhookQueue.add('handle-pull-request', {
+        installationId,
+        payload: body,
+        deliveryId,
+      });
+    }
+
+    return { status: 'OK' };
+  }
+}
+```
+
+## Webhook Validation
+
+GitHub signs webhook payloads with HMAC-SHA256. Always validate signatures to ensure requests are from GitHub:
+
+```typescript github.service.ts
+import { App } from 'octokit';
+
+@Injectable()
+export class GithubService {
+  private readonly app: App;
+
+  constructor() {
+    const key = Buffer.from(
+      process.env.GITHUB_APP_PRIVATE_KEY!,
+      'base64',
+    ).toString('utf-8');
+
+    this.app = new App({
+      appId: process.env.GITHUB_APP_APP_ID!,
+      privateKey: key,
+      webhooks: {
+        secret: process.env.GITHUB_APP_WEBHOOK_SECRET!,
+      },
+    });
+  }
+
+  async validateWebhook(rawBody: string, signature: string) {
+    const isValid = await this.app.webhooks.verify(rawBody, signature);
+    return isValid;
+  }
+}
+```
+
+<Warning>
+  Always validate webhook signatures before processing events. Reject requests with invalid signatures to prevent unauthorized access.
+</Warning>
+
+## Webhook Headers
+
+GitHub sends these important headers with webhook requests:
+
+| Header | Description | Example |
+|--------|-------------|----------|
+| `x-github-event` | The event type | `pull_request` |
+| `x-github-delivery` | Unique delivery ID | `12345678-1234-1234-1234-123456789012` |
+| `x-hub-signature-256` | HMAC-SHA256 signature | `sha256=abc123...` |
+| `content-type` | Request content type | `application/json` |
+
+## Installation Event Handler
+
+When users install your GitHub App, store the installation ID:
+
+```typescript
+async handleInstallation(
+  installationId: number,
+  senderId: number,
+  action: string,
+) {
+  if (action !== 'created') {
+    return;
+  }
+  
+  // Find user by GitHub ID
+  const user = await this.userService.findByGithubId(senderId.toString());
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+  
+  // Store installation ID for future API calls
+  await this.userService.update(user.id, { 
+    installationId: installationId 
+  });
+}
+```
+
+## Pull Request Event Handler
+
+Process pull request webhooks to create records in your database:
+
+```typescript
+async handlePullRequest(
+  installationId: number,
+  payload: EmitterWebhookEvent<'pull_request'>['payload'],
+  deliveryId: string,
+) {
+  const { action, pull_request, sender, repository } = payload;
+
+  // Only process opened PRs
+  if (action !== 'opened') {
+    return;
+  }
+
+  // Find the user
+  const user = await this.userService.findByGithubId(sender.id.toString());
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // Check for duplicates
+  const exists = await this.pullRequestExists(deliveryId);
+  if (exists) {
+    this.logger.log(`Pull request with id ${deliveryId} already exists`);
+    return { status: 'OK', message: 'Pull request already exists' };
+  }
+
+  // Create pull request record
+  const pullRequest = await this.prisma.pullRequest.create({
+    data: {
+      id: pull_request.id,
+      githubDeliveryId: deliveryId,
+      number: pull_request.number,
+      title: pull_request.title,
+      body: pull_request.body,
+      state: pull_request.state,
+      htmlUrl: pull_request.html_url,
+      diffUrl: pull_request.diff_url,
+      createdAt: pull_request.created_at,
+      updatedAt: pull_request.updated_at,
+      commits: pull_request.commits,
+      additions: pull_request.additions,
+      deletions: pull_request.deletions,
+      changedFiles: pull_request.changed_files,
+      authorName: pull_request.user.login,
+      repoName: repository.name,
+      userId: user.id,
+    },
+  });
+  
+  return pullRequest;
+}
+```
+
+## Async Processing with Queues
+
+Diffy uses BullMQ to process webhooks asynchronously, preventing timeouts:
+
+<Steps>
+  <Step title="Add job to queue">
+    ```typescript
+    @InjectQueue('webhook-queue') private webhookQueue: Queue,
+
+    // In webhook handler
+    await this.webhookQueue.add('handle-pull-request', {
+      installationId,
+      payload: body,
+      deliveryId,
+    });
+    ```
+  </Step>
+
+  <Step title="Process job in worker">
+    ```typescript
+    @Processor('webhook-queue')
+    export class WebhookProcessor {
+      @Process('handle-pull-request')
+      async handlePullRequest(job: Job) {
+        const { installationId, payload, deliveryId } = job.data;
+        await this.githubService.handlePullRequest(
+          installationId,
+          payload,
+          deliveryId,
+        );
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Processing webhooks asynchronously allows you to respond quickly to GitHub (within 10 seconds) while handling time-intensive operations in the background.
+</Note>
+
+## Webhook Payload Examples
+
+### Installation Event
+
+```json
+{
+  "action": "created",
+  "installation": {
+    "id": 12345678,
+    "account": {
+      "login": "octocat",
+      "id": 1,
+      "type": "User"
+    }
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 1
+  }
+}
+```
+
+### Pull Request Event
+
+```json
+{
+  "action": "opened",
+  "number": 123,
+  "pull_request": {
+    "id": 987654321,
+    "number": 123,
+    "state": "open",
+    "title": "Add new feature",
+    "body": "This PR adds a new feature...",
+    "html_url": "https://github.com/owner/repo/pull/123",
+    "diff_url": "https://github.com/owner/repo/pull/123.diff",
+    "commits": 3,
+    "additions": 100,
+    "deletions": 50,
+    "changed_files": 5,
+    "user": {
+      "login": "octocat",
+      "id": 1
+    },
+    "created_at": "2024-01-15T12:00:00Z",
+    "updated_at": "2024-01-15T12:00:00Z"
+  },
+  "repository": {
+    "name": "my-repo",
+    "full_name": "owner/my-repo"
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 1
+  },
+  "installation": {
+    "id": 12345678
+  }
+}
+```
+
+## Testing Webhooks Locally
+
+### Using ngrok
+
+<Steps>
+  <Step title="Install ngrok">
+    ```bash
+    npm install -g ngrok
+    ```
+  </Step>
+
+  <Step title="Start ngrok tunnel">
+    ```bash
+    ngrok http 3000
+    ```
+    
+    Copy the HTTPS URL (e.g., `https://abc123.ngrok.io`)
+  </Step>
+
+  <Step title="Update GitHub App webhook URL">
+    Go to your GitHub App settings and update the webhook URL:
+    
+    ```
+    https://abc123.ngrok.io/github/webhook
+    ```
+  </Step>
+
+  <Step title="Test webhook delivery">
+    Open or update a pull request in a repository with your app installed. Check ngrok's web interface at `http://localhost:4040` to see webhook deliveries.
+  </Step>
+</Steps>
+
+### Using GitHub CLI
+
+Test webhook handling with sample payloads:
+
+```bash
+# Send test installation webhook
+gh api repos/:owner/:repo/hooks/:hook_id/tests \
+  -X POST \
+  -f event=installation
+
+# Send test pull_request webhook
+gh api repos/:owner/:repo/hooks/:hook_id/tests \
+  -X POST \
+  -f event=pull_request
+```
+
+## Webhook Debugging
+
+### View Delivery Logs
+
+Check webhook delivery status in GitHub:
+
+1. Go to your GitHub App settings
+2. Click **Advanced** → **Recent Deliveries**
+3. View request/response details for each delivery
+
+### Log Webhook Events
+
+Add logging to track webhook processing:
+
+```typescript
+private readonly logger = new Logger(GithubController.name);
+
+@Post('webhook')
+async webhook(
+  @Req() req: WebhookRequest,
+  @Headers('x-github-event') event: string,
+  @Headers('x-github-delivery') deliveryId: string,
+) {
+  this.logger.log(`Received ${event} webhook: ${deliveryId}`);
+  
+  // ... validation and processing ...
+  
+  this.logger.log(`Webhook ${deliveryId} processed successfully`);
+  return { status: 'OK' };
+}
+```
+
+## Error Handling
+
+GitHub will retry failed webhook deliveries:
+
+- Returns `200-299` status code: Success
+- Returns `4xx` or `5xx` status code: Failure (will retry)
+- No response within 10 seconds: Timeout (will retry)
+
+```typescript
+@Post('webhook')
+async webhook(...) {
+  try {
+    // Validate and process webhook
+    const isValid = await this.githubService.validateWebhook(rawBody, signature);
+    
+    if (!isValid) {
+      return { status: 'ERROR' }; // Returns 200, but logs error
+    }
+    
+    // Process event
+    await this.processWebhook(event, req.body);
+    
+    return { status: 'OK' };
+  } catch (error) {
+    this.logger.error('Webhook processing failed', error);
+    throw new BadRequestException('Failed to process webhook');
+  }
+}
+```
+
+<Warning>
+  GitHub will retry failed webhooks up to 3 times with exponential backoff. Ensure your webhook handler is idempotent to handle duplicate deliveries.
+</Warning>
+
+## Webhook DTO Validation
+
+Validate webhook payloads using DTOs:
+
+```typescript receive-webhook.dto.ts
+import { IsNotEmpty, IsNumber, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class InstallationDto {
+  @IsNumber()
+  @IsNotEmpty()
+  id: number;
+}
+
+export class SenderDto {
+  @IsNumber()
+  @IsNotEmpty()
+  id: number;
+}
+
+export class ReceiveWebhookDto {
+  @ValidateNested()
+  @IsNotEmpty()
+  @Type(() => InstallationDto)
+  installation: InstallationDto;
+
+  @ValidateNested()
+  @IsNotEmpty()
+  @Type(() => SenderDto)
+  sender: SenderDto;
+}
+```
+
+## Security Best Practices
+
+- Always validate webhook signatures
+- Use HTTPS endpoints only
+- Implement rate limiting
+- Process webhooks asynchronously
+- Handle duplicate deliveries gracefully
+- Log all webhook events for auditing
+- Set up monitoring and alerts for webhook failures
+
+## Next Steps
+
+- Set up [WebSocket real-time updates](/guides/websockets) to notify clients of new pull requests
+- Learn about [GitHub App configuration](/guides/github-setup)
+- Explore the [GitHub webhook endpoint](/api/github/webhook)

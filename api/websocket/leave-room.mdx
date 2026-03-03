@@ -1,0 +1,146 @@
+---
+title: "Leave PR Room"
+api: "WebSocket leave-pr-room"
+description: "Leave a pull request room and stop receiving real-time updates"
+---
+
+## Event Name
+
+`leave-pr-room`
+
+## Description
+
+Leave a WebSocket room for a specific pull request. After leaving, you'll no longer receive real-time notifications for that pull request room.
+
+## Connection Setup
+
+First, establish a WebSocket connection to the Diffy API:
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+```
+
+## Payload
+
+<ParamField body="pullRequestId" type="number" required>
+  The ID of the pull request room to leave
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The username of the user leaving the room
+</ParamField>
+
+## Request Example
+
+```javascript
+socket.emit('leave-pr-room', {
+  pullRequestId: 123,
+  username: 'johndoe'
+});
+```
+
+## Server Responses
+
+When a user leaves a PR room, the server emits multiple events to all remaining clients in the room:
+
+### `left` Event
+
+Broadcast to all remaining users in the room when someone leaves.
+
+<ResponseField name="message" type="string">
+  Notification message indicating who left and from which PR
+  
+  Example: `"johndoe left PR 123"`
+</ResponseField>
+
+### `user-count` Event
+
+Sent to all remaining users in the room with the updated user count.
+
+<ResponseField name="userCount" type="number">
+  The total number of users still in the room (after the user left)
+</ResponseField>
+
+### `active-users` Event
+
+Sent to all remaining users in the room with the updated list of active usernames.
+
+<ResponseField name="users" type="array">
+  Array of usernames currently remaining in the room
+</ResponseField>
+
+## Listening for Responses
+
+```javascript
+// Listen for leave notifications
+socket.on('left', (message) => {
+  console.log(message); // "johndoe left PR 123"
+});
+
+// Listen for user count updates
+socket.on('user-count', (data) => {
+  console.log(`Users remaining: ${data.userCount}`);
+});
+
+// Listen for updated active users list
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+```
+
+## Complete Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+socket.on('connect', () => {
+  console.log('Connected to WebSocket server');
+  
+  // First join the room
+  socket.emit('join-pr-room', {
+    pullRequestId: 123,
+    username: 'johndoe'
+  });
+  
+  // Leave after some time
+  setTimeout(() => {
+    socket.emit('leave-pr-room', {
+      pullRequestId: 123,
+      username: 'johndoe'
+    });
+  }, 30000); // Leave after 30 seconds
+});
+
+// Listen for room events
+socket.on('left', (message) => {
+  console.log('Leave notification:', message);
+});
+
+socket.on('user-count', (data) => {
+  console.log('User count:', data.userCount);
+});
+
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+```
+
+## Room Architecture
+
+Diffy uses a room-based architecture where each pull request has its own dedicated room. The room identifier follows the pattern `pr:{pullRequestId}`. When you leave a room, you're removed from that specific pull request's channel.
+
+## Notes
+
+- Users are automatically removed from the room upon emitting this event
+- All remaining users in the room receive notifications when someone leaves
+- The user count and active users list are updated for all remaining participants
+- Leaving a room does not disconnect you from the WebSocket server; you remain connected and can join other rooms
+- It's good practice to leave rooms when navigating away from a pull request view

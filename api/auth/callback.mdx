@@ -1,0 +1,183 @@
+---
+title: "OAuth Callback"
+api: "GET /auth/callback"
+description: "Handles GitHub OAuth callback and returns JWT token"
+---
+
+## Overview
+
+This endpoint receives the OAuth callback from GitHub after user authorization. It validates the authorization code, creates or retrieves the user account, generates a JWT token, and redirects the user back to the application with the token.
+
+## Endpoint
+
+<ParamField path="endpoint" type="string">
+  `/auth/callback`
+</ParamField>
+
+## Authentication
+
+Handled automatically by GitHub OAuth flow. This endpoint is called by GitHub after user authorization.
+
+## Query Parameters
+
+<ParamField query="code" type="string" required>
+  Authorization code provided by GitHub OAuth
+</ParamField>
+
+<ParamField query="state" type="string">
+  Optional state parameter for CSRF protection
+</ParamField>
+
+## Request
+
+```bash cURL
+# This endpoint is typically called by GitHub, not directly by clients
+curl -X GET "https://api.diffy.com/auth/callback?code={GITHUB_AUTH_CODE}"
+```
+
+```javascript JavaScript
+// This endpoint is called by GitHub during OAuth flow
+// Client applications should listen for the redirect with token
+const urlParams = new URLSearchParams(window.location.search);
+const token = urlParams.get('token');
+
+if (token) {
+  // Store token for authenticated requests
+  localStorage.setItem('jwt_token', token);
+  console.log('Authentication successful');
+}
+```
+
+```python Python
+import requests
+
+# This endpoint is typically called by GitHub during OAuth flow
+auth_code = "github_authorization_code_here"
+response = requests.get(
+    f"https://api.diffy.com/auth/callback?code={auth_code}",
+    allow_redirects=False
+)
+
+# Extract token from redirect URL
+redirect_url = response.headers.get('Location')
+print(f"Redirect URL: {redirect_url}")
+```
+
+## Response
+
+<ResponseField name="redirect" type="302 Redirect">
+  Redirects to configured frontend URL with JWT token as query parameter
+</ResponseField>
+
+### Redirect URL Format
+
+```
+{GITHUB_REDIRECT_URL}?token={JWT_TOKEN}
+```
+
+### JWT Token Payload
+
+The generated JWT token contains the following claims:
+
+<ResponseField name="id" type="number">
+  User's unique identifier in the Diffy system
+</ResponseField>
+
+<ResponseField name="githubId" type="string">
+  User's GitHub ID
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  User's display name from GitHub
+</ResponseField>
+
+### Success Response Example
+
+```
+HTTP/1.1 302 Found
+Location: https://app.diffy.com?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### Decoded JWT Payload Example
+
+```json
+{
+  "id": 12345,
+  "githubId": "98765432",
+  "name": "John Doe",
+  "iat": 1709481600,
+  "exp": 1709568000
+}
+```
+
+## User Creation/Validation
+
+The callback handler performs the following operations:
+
+1. Validates the GitHub OAuth authorization code
+2. Retrieves user profile from GitHub API (including email and avatar)
+3. Checks if user exists in database by `githubId`
+4. If user exists, retrieves existing user record
+5. If user is new, creates new user record with:
+   - `githubId` - GitHub user ID
+   - `username` - GitHub username
+   - `email` - Primary email from GitHub
+   - `avatarUrl` - Profile picture URL
+   - `name` - Display name
+   - `githubAccessToken` - GitHub access token (encrypted)
+   - `githubRefreshToken` - GitHub refresh token (encrypted)
+6. Generates JWT token with user payload
+7. Redirects to frontend with token
+
+## Error Responses
+
+<ResponseField name="error" type="401">
+  Unauthorized - Invalid or expired authorization code
+</ResponseField>
+
+```json 401 Error
+{
+  "statusCode": 401,
+  "message": "Unauthorized",
+  "error": "Unauthorized"
+}
+```
+
+<ResponseField name="error" type="500">
+  Internal server error - Database or JWT generation failure
+</ResponseField>
+
+```json 500 Error
+{
+  "statusCode": 500,
+  "message": "Internal server error",
+  "error": "Internal Server Error"
+}
+```
+
+## Security Considerations
+
+- Authorization codes are single-use and expire quickly
+- JWT tokens should be stored securely (e.g., httpOnly cookies or secure storage)
+- Token expiration is enforced (default: 24 hours)
+- GitHub access tokens are encrypted before storage
+- HTTPS is required for all OAuth endpoints
+
+## Implementation Reference
+
+Source: `src/auth/auth.controller.ts:23-30`
+
+```typescript
+@Get('callback')
+@UseGuards(AuthGuard('github2'))
+GitHubCallback(@Res() res: Response, @Req() req: Request) {
+  const token = this.authService.generateToken(req.user as JwtPayload);
+  return res.redirect(
+    `${this.configService.get<string>('GITHUB_REDIRECT_URL')}?token=${token}`,
+  );
+}
+```
+
+## Related Endpoints
+
+- [GitHub Login](/api/auth/github-login) - Initiates OAuth flow

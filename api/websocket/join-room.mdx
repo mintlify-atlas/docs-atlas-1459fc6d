@@ -1,0 +1,137 @@
+---
+title: "Join PR Room"
+api: "WebSocket join-pr-room"
+description: "Join a pull request room to receive real-time updates and participate in chat"
+---
+
+## Event Name
+
+`join-pr-room`
+
+## Description
+
+Join a WebSocket room for a specific pull request. Once joined, you'll receive real-time notifications about messages, typing indicators, and other users in the room.
+
+## Connection Setup
+
+First, establish a WebSocket connection to the Diffy API:
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+```
+
+## Payload
+
+<ParamField body="pullRequestId" type="number" required>
+  The ID of the pull request room to join
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The username of the user joining the room
+</ParamField>
+
+## Request Example
+
+```javascript
+socket.emit('join-pr-room', {
+  pullRequestId: 123,
+  username: 'johndoe'
+});
+```
+
+## Server Responses
+
+When a user joins a PR room, the server emits multiple events to all clients in the room:
+
+### `joined` Event
+
+Broadcast to all users in the room when someone joins.
+
+<ResponseField name="message" type="string">
+  Notification message indicating who joined
+  
+  Example: `"johndoe has joined the chat"`
+</ResponseField>
+
+### `user-count` Event
+
+Sent to all users in the room with the updated user count.
+
+<ResponseField name="userCount" type="number">
+  The total number of users currently in the room
+</ResponseField>
+
+### `active-users` Event
+
+Sent to all users in the room with the list of active usernames.
+
+<ResponseField name="users" type="array">
+  Array of usernames currently in the room
+</ResponseField>
+
+## Listening for Responses
+
+```javascript
+// Listen for join notifications
+socket.on('joined', (message) => {
+  console.log(message); // "johndoe has joined the chat"
+});
+
+// Listen for user count updates
+socket.on('user-count', (data) => {
+  console.log(`Users in room: ${data.userCount}`);
+});
+
+// Listen for active users list
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+```
+
+## Complete Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+socket.on('connect', () => {
+  console.log('Connected to WebSocket server');
+  
+  // Join the PR room
+  socket.emit('join-pr-room', {
+    pullRequestId: 123,
+    username: 'johndoe'
+  });
+});
+
+// Listen for room events
+socket.on('joined', (message) => {
+  console.log('Join notification:', message);
+});
+
+socket.on('user-count', (data) => {
+  console.log('User count:', data.userCount);
+});
+
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+```
+
+## Room Architecture
+
+Diffy uses a room-based architecture where each pull request has its own dedicated room. The room identifier follows the pattern `pr:{pullRequestId}`. Users must join a room before they can send or receive messages specific to that pull request.
+
+## Notes
+
+- Users are automatically added to the room upon emitting this event
+- The username is stored in the socket's data and associated with the connection
+- All users in the room receive notifications when someone joins
+- You must join a room before you can send messages or receive PR-specific updates

@@ -1,0 +1,96 @@
+---
+title: "GitHub Login"
+api: "GET /auth/github"
+description: "Initiates the GitHub OAuth authentication flow"
+---
+
+## Overview
+
+This endpoint redirects users to GitHub's OAuth authorization page to begin the authentication process. After successful authorization, GitHub will redirect back to the callback endpoint with an authorization code.
+
+## Endpoint
+
+<ParamField path="endpoint" type="string">
+  `/auth/github`
+</ParamField>
+
+## Authentication
+
+No authentication required. This is the entry point for user authentication.
+
+## OAuth Scopes
+
+The following GitHub OAuth scopes are requested:
+- `user:email` - Access to user's email addresses
+
+## Request
+
+```bash cURL
+curl -X GET https://api.diffy.com/auth/github
+```
+
+```javascript JavaScript
+fetch('https://api.diffy.com/auth/github', {
+  method: 'GET',
+  redirect: 'follow'
+})
+.then(response => {
+  // User will be redirected to GitHub OAuth
+  console.log(response.url);
+});
+```
+
+```python Python
+import requests
+
+response = requests.get('https://api.diffy.com/auth/github', allow_redirects=True)
+print(f"Redirected to: {response.url}")
+```
+
+## Response
+
+<ResponseField name="redirect" type="302 Redirect">
+  Redirects to GitHub OAuth authorization page
+</ResponseField>
+
+### Redirect URL Format
+
+```
+https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}
+```
+
+## Flow
+
+1. User initiates login by accessing `/auth/github`
+2. Server redirects to GitHub OAuth authorization page
+3. User authorizes the application on GitHub
+4. GitHub redirects back to `/auth/callback` with authorization code
+5. Callback endpoint exchanges code for user data and returns JWT token
+
+## Error Responses
+
+<ResponseField name="error" type="500">
+  Internal server error if GitHub OAuth configuration is invalid
+</ResponseField>
+
+```json Error Response
+{
+  "statusCode": 500,
+  "message": "Internal server error",
+  "error": "Internal Server Error"
+}
+```
+
+## Implementation Reference
+
+Source: `src/auth/auth.controller.ts:15-21`
+
+```typescript
+@Get('github')
+@UseGuards(AuthGuard('github2'))
+@Redirect(
+  `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}`,
+  302,
+)
+async GitHub() {}
+```

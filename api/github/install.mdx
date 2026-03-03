@@ -1,0 +1,72 @@
+---
+title: 'GitHub App Installation'
+api: 'GET /github/install'
+description: 'Initiate the GitHub App installation flow'
+---
+
+## Overview
+
+The GitHub App installation endpoint redirects users to GitHub to install the Diffy GitHub App. This is the first step in connecting your GitHub repositories to Diffy for automated pull request analysis.
+
+## Endpoint
+
+```
+GET /github/install
+```
+
+## Authentication
+
+No authentication required.
+
+## Request
+
+This endpoint accepts no parameters or request body. Simply navigate to or redirect users to this endpoint to begin the installation process.
+
+### Example Request
+
+```bash
+curl -X GET https://api.diffy.com/github/install
+```
+
+## Response
+
+The endpoint returns a `302 Redirect` response that redirects the user to GitHub's App installation page.
+
+### Response Headers
+
+<ResponseField name="Location" type="string" required>
+  GitHub App installation URL where the user will be redirected
+</ResponseField>
+
+### Installation Flow
+
+1. User is redirected to GitHub's App installation page
+2. User selects which repositories to grant access to
+3. User authorizes the Diffy GitHub App
+4. GitHub redirects back to your application
+5. GitHub sends an `installation` webhook event to your webhook endpoint
+
+## Implementation Details
+
+The endpoint internally calls `githubService.requestInstallationUrl()` which uses the Octokit App API to generate a GitHub App installation URL.
+
+Source: `/home/daytona/workspace/source/src/github/github.controller.ts:35`
+
+```typescript
+@Get('install')
+@Redirect()
+async install(@Res() res: Response) {
+  const url = await this.githubService.requestInstallationUrl();
+  return res.redirect(url);
+}
+```
+
+## Next Steps
+
+After successful installation:
+
+1. GitHub will send a webhook event to your configured webhook URL
+2. The webhook handler will process the `installation` event
+3. The installation ID will be linked to the user's account
+
+See the [Webhook endpoint documentation](/api/github/webhook) for details on handling installation events.

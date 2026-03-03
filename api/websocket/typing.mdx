@@ -1,0 +1,334 @@
+---
+title: "Typing Indicators"
+api: "WebSocket typing"
+description: "Send and receive typing indicators in pull request rooms"
+---
+
+## Event Names
+
+- `typing` - Indicate that a user is typing
+- `stop-typing` - Indicate that a user stopped typing
+
+## Description
+
+Typing indicators provide real-time feedback to users in a pull request room, showing when someone is composing a message. This enhances the chat experience by making the conversation feel more interactive.
+
+## Connection Setup
+
+First, establish a WebSocket connection and join a room:
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+socket.on('connect', () => {
+  // Join the room first
+  socket.emit('join-pr-room', {
+    pullRequestId: 123,
+    username: 'johndoe'
+  });
+});
+```
+
+## Typing Event
+
+### Event Name
+
+`typing`
+
+### Payload
+
+<ParamField body="pullRequestId" type="number" required>
+  The ID of the pull request room
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The username of the user who is typing
+</ParamField>
+
+### Request Example
+
+```javascript
+socket.emit('typing', {
+  pullRequestId: 123,
+  username: 'johndoe'
+});
+```
+
+### Server Response
+
+The server broadcasts the typing indicator to all users in the room.
+
+<ResponseField name="username" type="string">
+  The username of the user who is typing
+</ResponseField>
+
+### Listening for Typing Events
+
+```javascript
+socket.on('typing', (data) => {
+  console.log(`${data.username} is typing...`);
+});
+```
+
+## Stop Typing Event
+
+### Event Name
+
+`stop-typing`
+
+### Payload
+
+<ParamField body="pullRequestId" type="number" required>
+  The ID of the pull request room
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The username of the user who stopped typing
+</ParamField>
+
+### Request Example
+
+```javascript
+socket.emit('stop-typing', {
+  pullRequestId: 123,
+  username: 'johndoe'
+});
+```
+
+### Server Response
+
+The server broadcasts the stop-typing indicator to all users in the room.
+
+<ResponseField name="username" type="string">
+  The username of the user who stopped typing
+</ResponseField>
+
+### Listening for Stop Typing Events
+
+```javascript
+socket.on('stop-typing', (data) => {
+  console.log(`${data.username} stopped typing`);
+});
+```
+
+## Complete Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('https://api.diffy.com', {
+  transports: ['websocket']
+});
+
+const pullRequestId = 123;
+const username = 'johndoe';
+let typingTimeout;
+
+socket.on('connect', () => {
+  console.log('Connected to WebSocket server');
+  
+  socket.emit('join-pr-room', {
+    pullRequestId,
+    username
+  });
+});
+
+// Listen for typing indicators
+socket.on('typing', (data) => {
+  if (data.username !== username) {
+    console.log(`${data.username} is typing...`);
+  }
+});
+
+socket.on('stop-typing', (data) => {
+  if (data.username !== username) {
+    console.log(`${data.username} stopped typing`);
+  }
+});
+
+// Handle user typing in input field
+function handleTyping() {
+  // Emit typing event
+  socket.emit('typing', {
+    pullRequestId,
+    username
+  });
+  
+  // Clear existing timeout
+  clearTimeout(typingTimeout);
+  
+  // Set timeout to emit stop-typing after 1 second of inactivity
+  typingTimeout = setTimeout(() => {
+    socket.emit('stop-typing', {
+      pullRequestId,
+      username
+    });
+  }, 1000);
+}
+
+// Attach to input field
+const messageInput = document.getElementById('message-input');
+messageInput.addEventListener('input', handleTyping);
+```
+
+## React Example
+
+```javascript
+import { useEffect, useState, useRef } from 'react';
+import { io } from 'socket.io-client';
+
+function PRChat({ pullRequestId, username }) {
+  const [socket, setSocket] = useState(null);
+  const [typingUsers, setTypingUsers] = useState(new Set());
+  const [inputMessage, setInputMessage] = useState('');
+  const typingTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    const newSocket = io('https://api.diffy.com', {
+      transports: ['websocket']
+    });
+
+    newSocket.on('connect', () => {
+      newSocket.emit('join-pr-room', {
+        pullRequestId,
+        username
+      });
+    });
+
+    newSocket.on('typing', (data) => {
+      if (data.username !== username) {
+        setTypingUsers((prev) => new Set([...prev, data.username]));
+      }
+    });
+
+    newSocket.on('stop-typing', (data) => {
+      setTypingUsers((prev) => {
+        const updated = new Set(prev);
+        updated.delete(data.username);
+        return updated;
+      });
+    });
+
+    setSocket(newSocket);
+
+    return () => {
+      newSocket.emit('leave-pr-room', { pullRequestId, username });
+      newSocket.close();
+    };
+  }, [pullRequestId, username]);
+
+  const handleInputChange = (e) => {
+    const value = e.target.value;
+    setInputMessage(value);
+
+    if (socket && value.trim()) {
+      // Emit typing event
+      socket.emit('typing', {
+        pullRequestId,
+        username
+      });
+
+      // Clear existing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set timeout to emit stop-typing after 1 second
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit('stop-typing', {
+          pullRequestId,
+          username
+        });
+      }, 1000);
+    }
+  };
+
+  const sendMessage = () => {
+    if (socket && inputMessage.trim()) {
+      // Stop typing indicator when message is sent
+      socket.emit('stop-typing', {
+        pullRequestId,
+        username
+      });
+      
+      socket.emit('send-message-to-pr-room', {
+        pullRequestId,
+        username,
+        message: inputMessage
+      });
+      
+      setInputMessage('');
+      
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    }
+  };
+
+  return (
+    <div>
+      <div className="typing-indicator">
+        {typingUsers.size > 0 && (
+          <p>
+            {Array.from(typingUsers).join(', ')} 
+            {typingUsers.size === 1 ? ' is' : ' are'} typing...
+          </p>
+        )}
+      </div>
+      <input
+        value={inputMessage}
+        onChange={handleInputChange}
+        onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+        placeholder="Type a message..."
+      />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+}
+```
+
+## Best Practices
+
+### Debouncing
+
+Implement a debounce mechanism to avoid sending too many typing events:
+
+- Emit `typing` when the user starts typing
+- Use a timeout (typically 1 second) to automatically emit `stop-typing` after inactivity
+- Clear and reset the timeout on each keystroke
+
+### Filtering Self
+
+Always filter out your own typing indicators on the client side:
+
+```javascript
+socket.on('typing', (data) => {
+  if (data.username !== currentUsername) {
+    // Show typing indicator
+  }
+});
+```
+
+### Cleanup
+
+Always emit `stop-typing` when:
+- The user sends a message
+- The user navigates away from the page
+- The user leaves the room
+- The input field loses focus (optional)
+
+## Room Architecture
+
+Typing indicators are broadcast only to users who have joined the specific pull request room. The room identifier follows the pattern `pr:{pullRequestId}`.
+
+## Notes
+
+- You must join a room using `join-pr-room` before sending typing indicators
+- Typing indicators are broadcast to all users in the room, including the sender (filter on client side)
+- These events do not persist; they're only for real-time feedback
+- Consider implementing a timeout mechanism to automatically clear typing indicators
+- Typing indicators improve user experience but should not be relied upon for critical functionality

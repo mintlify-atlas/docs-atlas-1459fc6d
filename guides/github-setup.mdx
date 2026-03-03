@@ -1,0 +1,350 @@
+---
+title: GitHub App Setup
+description: Configure your GitHub App to enable pull request integration with Diffy
+---
+
+## Overview
+
+Diffy uses a GitHub App to access pull requests, receive webhooks, and interact with repositories. This guide walks you through creating and configuring your GitHub App.
+
+## Prerequisites
+
+- A GitHub account with organization or repository admin access
+- Node.js 18+ installed
+- Diffy API running locally or deployed
+
+## Creating a GitHub App
+
+<Steps>
+  <Step title="Navigate to GitHub Developer Settings">
+    Go to GitHub Settings → Developer settings → GitHub Apps → **New GitHub App**
+    
+    Or visit directly: https://github.com/settings/apps/new
+  </Step>
+
+  <Step title="Configure Basic Information">
+    Fill in the basic app information:
+
+    - **GitHub App name**: `Diffy` (or your preferred name)
+    - **Homepage URL**: `https://yourdomain.com`
+    - **Callback URL**: `https://api.yourdomain.com/auth/callback`
+    - **Setup URL**: Leave blank
+    - **Webhook URL**: `https://api.yourdomain.com/github/webhook`
+    - **Webhook secret**: Generate a strong random string (save this!)
+  </Step>
+
+  <Step title="Set Repository Permissions">
+    Configure the following permissions:
+
+    | Permission | Access Level | Purpose |
+    |------------|--------------|----------|
+    | Pull requests | **Read & Write** | Access PR data and diffs |
+    | Contents | **Read-only** | Read repository content |
+    | Metadata | **Read-only** | Access repository metadata |
+  </Step>
+
+  <Step title="Subscribe to Events">
+    Enable these webhook events:
+
+    - ☑️ **Installation** - Track app installations
+    - ☑️ **Pull request** - Receive PR notifications
+  </Step>
+
+  <Step title="Create the App">
+    Click **Create GitHub App** at the bottom of the page.
+  </Step>
+
+  <Step title="Generate a Private Key">
+    After creating the app:
+    
+    1. Scroll down to **Private keys**
+    2. Click **Generate a private key**
+    3. Save the downloaded `.pem` file securely
+    4. Convert to base64 for environment variable:
+    
+    ```bash
+    cat your-app-name.2024-01-15.private-key.pem | base64 -w 0
+    ```
+  </Step>
+
+  <Step title="Note the App ID">
+    Find your **App ID** at the top of the settings page (e.g., `123456`). You'll need this for configuration.
+  </Step>
+</Steps>
+
+## Environment Configuration
+
+Add these variables to your `.env` file:
+
+```bash .env
+# GitHub App Configuration
+GITHUB_APP_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY=LS0tLS1CRUdJTi... # base64 encoded private key
+GITHUB_APP_WEBHOOK_SECRET=your_webhook_secret_here
+
+# GitHub OAuth (from OAuth Apps settings)
+GITHUB_APP_CLIENT_ID=Iv1.abc123def456
+GITHUB_APP_CLIENT_SECRET=your_client_secret_here
+GITHUB_APP_CALLBACK_URL=http://localhost:3000/auth/callback
+```
+
+<Warning>
+  Never commit your private key, webhook secret, or client secret to version control. Use environment variables or a secrets manager.
+</Warning>
+
+## GitHub Service Implementation
+
+The GitHub service initializes the Octokit App client with your credentials:
+
+```typescript github.service.ts
+import { Injectable } from '@nestjs/common';
+import { App } from 'octokit';
+
+@Injectable()
+export class GithubService {
+  private readonly app: App;
+
+  constructor() {
+    // Decode base64 private key
+    const key = Buffer.from(
+      process.env.GITHUB_APP_PRIVATE_KEY!,
+      'base64',
+    ).toString('utf-8');
+
+    // Initialize GitHub App
+    this.app = new App({
+      appId: process.env.GITHUB_APP_APP_ID!,
+      privateKey: key,
+      webhooks: {
+        secret: process.env.GITHUB_APP_WEBHOOK_SECRET!,
+      },
+    });
+  }
+
+  async requestInstallationUrl() {
+    // Get installation URL for users
+    return await this.app.getInstallationUrl();
+  }
+}
+```
+
+## Installing the GitHub App
+
+<Steps>
+  <Step title="Get Installation URL">
+    Users need to install your GitHub App to their account or organization:
+
+    ```typescript
+    // Backend endpoint
+    @Get('github/install')
+    @Redirect()
+    async install(@Res() res: Response) {
+      const url = await this.githubService.requestInstallationUrl();
+      return res.redirect(url);
+    }
+    ```
+
+    Direct users to: `https://api.yourdomain.com/github/install`
+  </Step>
+
+  <Step title="Select Repositories">
+    On the installation page, users can choose:
+    
+    - **All repositories** - Grant access to all current and future repos
+    - **Only select repositories** - Choose specific repositories
+  </Step>
+
+  <Step title="Handle Installation Webhook">
+    When a user installs the app, Diffy receives an `installation` webhook:
+
+    ```typescript
+    async handleInstallation(
+      installationId: number,
+      senderId: number,
+      action: string,
+    ) {
+      if (action !== 'created') {
+        return;
+      }
+      const user = await this.userService.findByGithubId(senderId.toString());
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+      // Store installation ID for the user
+      await this.userService.update(user.id, { installationId: installationId });
+    }
+    ```
+
+    The installation ID is stored and used to authenticate API requests to GitHub.
+  </Step>
+</Steps>
+
+## Creating Installation Tokens
+
+Use installation tokens to make authenticated requests to GitHub:
+
+```typescript
+async createInstallationToken(installationId: number) {
+  const octokit = await this.app.getInstallationOctokit(installationId);
+  const installationToken = await octokit.request(
+    `POST /app/installations/${installationId}/access_tokens`,
+    {
+      headers: {
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+  return installationToken;
+}
+```
+
+<Note>
+  Installation tokens expire after 1 hour. The Octokit library handles token refresh automatically.
+</Note>
+
+## Accessing Pull Requests
+
+Once installed, you can access pull request data:
+
+```typescript
+async getPullRequest(
+  owner: string,
+  repo: string,
+  pull_number: number,
+  installationId: number,
+) {
+  const octokit = await this.app.getInstallationOctokit(installationId);
+  const response = await octokit.request(
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+    {
+      owner: owner,
+      repo: repo,
+      pull_number: pull_number,
+      headers: {
+        'X-GitHub-Api-Version': '2022-11-28',
+        accept: 'application/vnd.github+json',
+      },
+    },
+  );
+  return response.data;
+}
+```
+
+## Getting PR Diffs
+
+Fetch the diff content for a pull request:
+
+```typescript
+async getDiff(
+  owner: string,
+  repo: string,
+  pull_number: number,
+  installationId: number,
+) {
+  const octokit = await this.app.getInstallationOctokit(installationId);
+  const response = await octokit.request(
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+    {
+      owner: owner,
+      repo: repo,
+      pull_number: pull_number,
+      headers: {
+        'X-GitHub-Api-Version': '2022-11-28',
+        accept: 'application/vnd.github.diff+json', // Request diff format
+      },
+    },
+  );
+  return response.data;
+}
+```
+
+## API Endpoints
+
+These endpoints are available after GitHub App setup:
+
+### Get Installation URL
+
+```bash
+GET /github/install
+```
+
+Redirects users to GitHub App installation page.
+
+### Get Pull Request
+
+```bash
+GET /github/pull-request/:owner/:repo/:pull_number
+Authorization: Bearer {jwt_token}
+```
+
+Fetches pull request details.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  https://api.diffy.dev/github/pull-request/facebook/react/12345
+```
+
+### Get PR Diff
+
+```bash
+GET /github/diff/:owner/:repo/:pull_number
+Authorization: Bearer {jwt_token}
+```
+
+Fetches the diff content for a pull request.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  https://api.diffy.dev/github/diff/facebook/react/12345
+```
+
+## Listing Installations
+
+List all app installations for monitoring:
+
+```typescript
+async listInstallations() {
+  const installations = await this.app.octokit.request(
+    'GET /app/installations',
+  );
+  return installations.data;
+}
+```
+
+## Troubleshooting
+
+### "Bad credentials" error
+
+- Verify your App ID is correct
+- Check that the private key is properly base64 encoded
+- Ensure the private key hasn't expired or been revoked
+
+### Webhook not receiving events
+
+- Verify the webhook URL is publicly accessible
+- Check that the webhook secret matches your configuration
+- Review webhook delivery logs in GitHub App settings
+
+### "Resource not accessible" error
+
+- Ensure the GitHub App is installed to the target repository
+- Verify the app has the required permissions
+- Check that the user's installation ID is correctly stored
+
+## Security Best Practices
+
+<Warning>
+  - Store private keys securely using environment variables or secrets managers
+  - Rotate webhook secrets periodically
+  - Use HTTPS for all webhook endpoints
+  - Validate webhook signatures (see [Webhooks guide](/guides/webhooks))
+  - Limit repository access to only what's needed
+</Warning>
+
+## Next Steps
+
+- Learn how to handle [GitHub Webhooks](/guides/webhooks)
+- Set up [WebSocket real-time updates](/guides/websockets)
+- Explore the [GitHub API endpoints](/api/github/install)

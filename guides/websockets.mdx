@@ -1,0 +1,644 @@
+---
+title: WebSocket Real-Time Events
+description: Connect to WebSocket events for real-time collaboration on pull requests
+---
+
+## Overview
+
+Diffy uses WebSockets (Socket.IO) to enable real-time collaboration features like:
+
+- Live user presence in pull request rooms
+- Real-time chat and messaging
+- Typing indicators
+- User join/leave notifications
+- Active user counts
+
+## WebSocket Gateway
+
+The WebSocket server is implemented using NestJS WebSocket Gateway:
+
+```typescript events.gateway.ts
+import {
+  MessageBody,
+  ConnectedSocket,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+
+@WebSocketGateway({ cors: '*' })
+export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer()
+  server: Server;
+
+  handleConnection(@ConnectedSocket() client: Socket) {
+    console.log('Client connected', client.id);
+  }
+
+  handleDisconnect(@ConnectedSocket() client: Socket) {
+    console.log('Client disconnected', client.id);
+  }
+}
+```
+
+<Note>
+  The gateway is configured with `cors: '*'` for development. In production, restrict CORS to your frontend domain.
+</Note>
+
+## Client Connection
+
+Connect to the WebSocket server from your frontend:
+
+<CodeGroup>
+```typescript React
+import { io, Socket } from 'socket.io-client';
+import { useEffect, useState } from 'react';
+
+function usePullRequestSocket(pullRequestId: number, username: string) {
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [activeUsers, setActiveUsers] = useState<string[]>([]);
+  const [userCount, setUserCount] = useState(0);
+
+  useEffect(() => {
+    // Connect to WebSocket server
+    const newSocket = io('https://api.diffy.dev', {
+      transports: ['websocket'],
+    });
+
+    setSocket(newSocket);
+
+    // Join the PR room
+    newSocket.emit('join-pr-room', { pullRequestId, username });
+
+    // Listen for events
+    newSocket.on('active-users', (users: string[]) => {
+      setActiveUsers(users);
+    });
+
+    newSocket.on('user-count', ({ userCount }: { userCount: number }) => {
+      setUserCount(userCount);
+    });
+
+    return () => {
+      // Leave room on unmount
+      newSocket.emit('leave-pr-room', { pullRequestId, username });
+      newSocket.close();
+    };
+  }, [pullRequestId, username]);
+
+  return { socket, activeUsers, userCount };
+}
+```
+
+```typescript JavaScript
+import { io } from 'socket.io-client';
+
+// Connect to WebSocket server
+const socket = io('https://api.diffy.dev', {
+  transports: ['websocket'],
+});
+
+// Join a pull request room
+socket.emit('join-pr-room', {
+  pullRequestId: 123,
+  username: 'octocat',
+});
+
+// Listen for events
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+
+socket.on('user-count', ({ userCount }) => {
+  console.log('User count:', userCount);
+});
+```
+
+```typescript Vue.js
+import { io, Socket } from 'socket.io-client';
+import { ref, onMounted, onUnmounted } from 'vue';
+
+export function usePullRequestSocket(pullRequestId: number, username: string) {
+  const socket = ref<Socket | null>(null);
+  const activeUsers = ref<string[]>([]);
+  const userCount = ref(0);
+
+  onMounted(() => {
+    socket.value = io('https://api.diffy.dev', {
+      transports: ['websocket'],
+    });
+
+    socket.value.emit('join-pr-room', { pullRequestId, username });
+
+    socket.value.on('active-users', (users: string[]) => {
+      activeUsers.value = users;
+    });
+
+    socket.value.on('user-count', ({ userCount: count }: { userCount: number }) => {
+      userCount.value = count;
+    });
+  });
+
+  onUnmounted(() => {
+    if (socket.value) {
+      socket.value.emit('leave-pr-room', { pullRequestId, username });
+      socket.value.close();
+    }
+  });
+
+  return { socket, activeUsers, userCount };
+}
+```
+</CodeGroup>
+
+## Room Management
+
+Pull requests are organized into rooms. Users join rooms to collaborate on specific PRs.
+
+### Join PR Room
+
+Join a pull request room to receive updates:
+
+```typescript
+@SubscribeMessage('join-pr-room')
+async handleJoinPRRoom(
+  @MessageBody() data: { pullRequestId: number; username: string },
+  @ConnectedSocket() client: Socket<any, any, any, { username: string }>,
+) {
+  // Join the room
+  await client.join(`pr:${data.pullRequestId}`);
+  
+  // Store username in socket data
+  client.data.username = data.username;
+  
+  // Notify other users
+  client
+    .to(`pr:${data.pullRequestId}`)
+    .emit('joined', `${data.username} has joined the chat`);
+  
+  // Get all clients in room
+  const clientsInRoom = await this.server
+    .in(`pr:${data.pullRequestId}`)
+    .fetchSockets();
+  
+  // Extract usernames
+  const users = clientsInRoom.map(
+    (client: { data: { username: string } }) => client.data.username,
+  );
+  
+  // Broadcast user count and list
+  const userCount = users.length;
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('user-count', { userCount });
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('active-users', users);
+  
+  return data;
+}
+```
+
+**Client usage:**
+
+```typescript
+socket.emit('join-pr-room', {
+  pullRequestId: 123,
+  username: 'octocat',
+});
+
+// Listen for join notifications
+socket.on('joined', (message) => {
+  console.log(message); // "octocat has joined the chat"
+});
+```
+
+### Leave PR Room
+
+Leave a room when navigating away:
+
+```typescript
+@SubscribeMessage('leave-pr-room')
+async handleLeavePRRoom(
+  @MessageBody() data: { pullRequestId: number; username: string },
+  @ConnectedSocket() client: Socket,
+) {
+  // Leave the room
+  await client.leave(`pr:${data.pullRequestId}`);
+  
+  // Notify other users
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('left', `${data.username} left PR ${data.pullRequestId}`);
+  
+  // Update user count and list
+  const clientsInRoom = await this.server
+    .in(`pr:${data.pullRequestId}`)
+    .fetchSockets();
+  const users = clientsInRoom.map(
+    (client: { data: { username: string } }) => client.data.username,
+  );
+  const userCount = users.length;
+  
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('user-count', { userCount });
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('active-users', users);
+  
+  return data;
+}
+```
+
+**Client usage:**
+
+```typescript
+socket.emit('leave-pr-room', {
+  pullRequestId: 123,
+  username: 'octocat',
+});
+
+// Listen for leave notifications
+socket.on('left', (message) => {
+  console.log(message); // "octocat left PR 123"
+});
+```
+
+## Real-Time Messaging
+
+Send and receive messages in pull request rooms:
+
+### Send Message
+
+```typescript
+@SubscribeMessage('send-message-to-pr-room')
+handleMessage(
+  @MessageBody()
+  data: {
+    message: string;
+    pullRequestId: number;
+    username: string;
+  },
+) {
+  // Broadcast message to all users in room
+  this.server.to(`pr:${data.pullRequestId}`).emit('pr-room-message', {
+    message: data.message,
+    username: data.username,
+  });
+  return data;
+}
+```
+
+**Client usage:**
+
+```typescript
+// Send a message
+socket.emit('send-message-to-pr-room', {
+  pullRequestId: 123,
+  username: 'octocat',
+  message: 'Great changes! 🎉',
+});
+
+// Receive messages
+socket.on('pr-room-message', ({ username, message }) => {
+  console.log(`${username}: ${message}`);
+});
+```
+
+### Complete Chat Example
+
+```typescript
+import { useState, useEffect } from 'react';
+import { Socket } from 'socket.io-client';
+
+interface Message {
+  username: string;
+  message: string;
+  timestamp: Date;
+}
+
+function PullRequestChat({ 
+  socket, 
+  pullRequestId, 
+  username 
+}: { 
+  socket: Socket; 
+  pullRequestId: number; 
+  username: string;
+}) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+
+  useEffect(() => {
+    // Listen for incoming messages
+    socket.on('pr-room-message', ({ username, message }) => {
+      setMessages(prev => [...prev, { 
+        username, 
+        message, 
+        timestamp: new Date() 
+      }]);
+    });
+
+    return () => {
+      socket.off('pr-room-message');
+    };
+  }, [socket]);
+
+  const sendMessage = () => {
+    if (!input.trim()) return;
+
+    socket.emit('send-message-to-pr-room', {
+      pullRequestId,
+      username,
+      message: input,
+    });
+
+    setInput('');
+  };
+
+  return (
+    <div>
+      <div className="messages">
+        {messages.map((msg, i) => (
+          <div key={i}>
+            <strong>{msg.username}:</strong> {msg.message}
+          </div>
+        ))}
+      </div>
+      <input 
+        value={input} 
+        onChange={(e) => setInput(e.target.value)}
+        onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+      />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+}
+```
+
+## Typing Indicators
+
+Show when users are typing:
+
+### Start Typing
+
+```typescript
+@SubscribeMessage('typing')
+handleTyping(
+  @MessageBody() data: { pullRequestId: number; username: string },
+) {
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('typing', { username: data.username });
+  return data;
+}
+```
+
+### Stop Typing
+
+```typescript
+@SubscribeMessage('stop-typing')
+handleStopTyping(
+  @MessageBody() data: { pullRequestId: number; username: string },
+) {
+  this.server
+    .to(`pr:${data.pullRequestId}`)
+    .emit('stop-typing', { username: data.username });
+  return data;
+}
+```
+
+**Client implementation:**
+
+```typescript
+import { useState, useEffect, useRef } from 'react';
+
+function TypingIndicator({ socket, pullRequestId, username }) {
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const typingTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    socket.on('typing', ({ username }) => {
+      setTypingUsers(prev => [...new Set([...prev, username])]);
+    });
+
+    socket.on('stop-typing', ({ username }) => {
+      setTypingUsers(prev => prev.filter(u => u !== username));
+    });
+
+    return () => {
+      socket.off('typing');
+      socket.off('stop-typing');
+    };
+  }, [socket]);
+
+  const handleInputChange = () => {
+    // Emit typing event
+    socket.emit('typing', { pullRequestId, username });
+
+    // Clear previous timeout
+    if (typingTimeout.current) {
+      clearTimeout(typingTimeout.current);
+    }
+
+    // Stop typing after 2 seconds of inactivity
+    typingTimeout.current = setTimeout(() => {
+      socket.emit('stop-typing', { pullRequestId, username });
+    }, 2000);
+  };
+
+  return (
+    <div>
+      {typingUsers.length > 0 && (
+        <p>{typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...</p>
+      )}
+      <input onChange={handleInputChange} />
+    </div>
+  );
+}
+```
+
+## Active Users
+
+Display a list of active users in the room:
+
+```typescript
+import { useEffect, useState } from 'react';
+
+function ActiveUsers({ socket }) {
+  const [activeUsers, setActiveUsers] = useState<string[]>([]);
+  const [userCount, setUserCount] = useState(0);
+
+  useEffect(() => {
+    socket.on('active-users', (users: string[]) => {
+      setActiveUsers(users);
+    });
+
+    socket.on('user-count', ({ userCount }) => {
+      setUserCount(userCount);
+    });
+
+    return () => {
+      socket.off('active-users');
+      socket.off('user-count');
+    };
+  }, [socket]);
+
+  return (
+    <div>
+      <h3>Active Users ({userCount})</h3>
+      <ul>
+        {activeUsers.map(user => (
+          <li key={user}>{user}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+## Available Events
+
+### Client → Server Events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `join-pr-room` | `{ pullRequestId, username }` | Join a pull request room |
+| `leave-pr-room` | `{ pullRequestId, username }` | Leave a pull request room |
+| `send-message-to-pr-room` | `{ pullRequestId, username, message }` | Send a message to room |
+| `typing` | `{ pullRequestId, username }` | Indicate user is typing |
+| `stop-typing` | `{ pullRequestId, username }` | Indicate user stopped typing |
+
+### Server → Client Events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `joined` | `string` | User joined notification |
+| `left` | `string` | User left notification |
+| `active-users` | `string[]` | List of active usernames |
+| `user-count` | `{ userCount }` | Number of users in room |
+| `pr-room-message` | `{ username, message }` | New message in room |
+| `typing` | `{ username }` | User started typing |
+| `stop-typing` | `{ username }` | User stopped typing |
+
+## Connection Management
+
+### Reconnection
+
+Socket.IO automatically handles reconnection:
+
+```typescript
+const socket = io('https://api.diffy.dev', {
+  transports: ['websocket'],
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5,
+});
+
+socket.on('connect', () => {
+  console.log('Connected to WebSocket server');
+  // Rejoin rooms after reconnection
+  socket.emit('join-pr-room', { pullRequestId, username });
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('Disconnected:', reason);
+});
+
+socket.on('reconnect', (attemptNumber) => {
+  console.log('Reconnected after', attemptNumber, 'attempts');
+});
+```
+
+### Error Handling
+
+```typescript
+socket.on('connect_error', (error) => {
+  console.error('Connection error:', error);
+  // Show user-friendly error message
+});
+
+socket.on('error', (error) => {
+  console.error('Socket error:', error);
+});
+```
+
+## Production Configuration
+
+### CORS Setup
+
+Restrict WebSocket CORS in production:
+
+```typescript
+@WebSocketGateway({
+  cors: {
+    origin: process.env.FRONTEND_URL || 'https://diffy.dev',
+    credentials: true,
+  },
+})
+export class EventsGateway { ... }
+```
+
+### Environment Variables
+
+```bash .env
+FRONTEND_URL=https://diffy.dev
+WEBSOCKET_PORT=3001  # Optional: separate port for WebSockets
+```
+
+## Testing WebSockets
+
+### Using Socket.IO Client
+
+```bash
+npm install -g socket.io-client
+```
+
+```javascript test-socket.js
+const io = require('socket.io-client');
+
+const socket = io('http://localhost:3000');
+
+socket.on('connect', () => {
+  console.log('Connected:', socket.id);
+  
+  socket.emit('join-pr-room', {
+    pullRequestId: 123,
+    username: 'test-user',
+  });
+});
+
+socket.on('active-users', (users) => {
+  console.log('Active users:', users);
+});
+
+socket.on('pr-room-message', ({ username, message }) => {
+  console.log(`${username}: ${message}`);
+});
+```
+
+```bash
+node test-socket.js
+```
+
+## Performance Considerations
+
+- Use rooms to limit broadcast scope
+- Implement rate limiting for message events
+- Clean up event listeners on unmount
+- Use connection pooling for multiple rooms
+- Monitor socket connections with health checks
+
+<Warning>
+  Always clean up WebSocket connections and event listeners when components unmount to prevent memory leaks.
+</Warning>
+
+## Next Steps
+
+- Learn about [GitHub Webhooks](/guides/webhooks) to trigger real-time notifications
+- Set up [Authentication](/guides/authentication) to secure WebSocket connections
+- Explore the [WebSocket events](/api/websocket/join-room)
