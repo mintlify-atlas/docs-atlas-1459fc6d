@@ -1,0 +1,113 @@
+{
+  "projectType": "api-service",
+  "projectName": "Diffy API",
+  "projectDescription": "Backend API for a collaborative code review platform with GitHub integration and real-time WebSocket communication",
+  "theme": "aspen",
+  "primaryColor": "#8B5CF6",
+  "lightColor": "#A78BFA",
+  "darkColor": "#6D28D9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/github-setup",
+              "guides/webhooks",
+              "guides/websockets"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth/github-login",
+              "api/auth/callback"
+            ]
+          },
+          {
+            "group": "Users",
+            "pages": [
+              "api/users/get-all",
+              "api/users/get-me",
+              "api/users/get-by-id",
+              "api/users/create",
+              "api/users/update",
+              "api/users/delete"
+            ]
+          },
+          {
+            "group": "Pull Requests",
+            "pages": [
+              "api/pull-requests/get-pull-request",
+              "api/pull-requests/get-diff"
+            ]
+          },
+          {
+            "group": "Comments",
+            "pages": [
+              "api/comments/create",
+              "api/comments/get-all",
+              "api/comments/get-by-id",
+              "api/comments/update",
+              "api/comments/delete",
+              "api/comments/resolve",
+              "api/comments/unresolve"
+            ]
+          },
+          {
+            "group": "GitHub Integration",
+            "pages": [
+              "api/github/install",
+              "api/github/webhook"
+            ]
+          },
+          {
+            "group": "WebSocket Events",
+            "pages": [
+              "api/websocket/join-room",
+              "api/websocket/leave-room",
+              "api/websocket/send-message",
+              "api/websocket/typing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "GitHub OAuth authentication with JWT tokens",
+    "Pull request management and diff viewing",
+    "Threaded comment system with resolve/unresolve",
+    "Real-time WebSocket collaboration",
+    "GitHub webhook integration with BullMQ processing",
+    "Prisma ORM with PostgreSQL database"
+  ],
+  "publicApiSurface": [
+    "GET /auth/github - Initiate GitHub OAuth flow",
+    "GET /auth/callback - Handle GitHub OAuth callback",
+    "GET /users/me - Get current authenticated user",
+    "POST /comments - Create a comment on a pull request",
+    "PATCH /comments/:id/resolve - Resolve a comment thread",
+    "GET /github/pull-request/:owner/:repo/:pull_number - Get pull request details",
+    "GET /github/diff/:owner/:repo/:pull_number - Get pull request diff",
+    "POST /github/webhook - Handle GitHub webhooks",
+    "WebSocket: join-pr-room - Join a pull request room",
+    "WebSocket: send-message-to-pr-room - Send message to PR room",
+    "WebSocket: typing - Send typing indicator"
+  ]
+}
